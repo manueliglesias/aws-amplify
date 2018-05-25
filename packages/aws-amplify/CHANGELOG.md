@@ -3,6 +3,17 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+<a name="0.5.0"></a>
+# 0.5.0 (2018-05-25)
+
+
+### Features
+
+* Add ServiceWorker utility class ([#831](https://github.com/aws/aws-amplify/issues/831)) ([2fd46e3](https://github.com/aws/aws-amplify/commit/2fd46e3))
+
+
+
+
 <a name="0.4.2-unstable.17"></a>
 ## [0.4.2-unstable.17](https://github.com/aws/aws-amplify/compare/aws-amplify@0.4.2-unstable.16...aws-amplify@0.4.2-unstable.17) (2018-05-24)
 
