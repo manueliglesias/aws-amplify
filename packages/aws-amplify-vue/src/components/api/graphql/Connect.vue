@@ -89,8 +89,8 @@ export default {
 
     async _fetchData() {
       const {
-        query: { query = null, variables = {} } = {},
-        mutation: { query: mutation = null, variables: mutationVariables = {} } = {},
+        query: { query = null, variables = {}, authMode: queryAuthMode } = {},
+        mutation: { query: mutation = null, variables: mutationVariables = {}, authMode: mutationAuthMode } = {},
         subscription,
         onSubscriptionMsg = (prevData) => prevData,
       } = this.$props;
@@ -114,7 +114,7 @@ export default {
         try {
           this.data = {};
           this.loading = true;
-          const response = await this.$Amplify.API.graphql({ query, variables });
+          const response = await this.$Amplify.API.graphql({ query, variables, authMode: queryAuthMode });
           this.data = response.data;
         } catch (error) {
           this.logger.warn(error);
@@ -126,7 +126,7 @@ export default {
       if (hasValidMutation) {
         this.isMutation = true;
         this.internalMutation = async () => {
-          this.$Amplify.API.graphql({ query: mutation, variables: mutationVariables }).then((result) => {
+          this.$Amplify.API.graphql({ query: mutation, variables: mutationVariables, authMode: mutationAuthMode }).then((result) => {
             this.$emit('done', result);
             return result;
           })
@@ -139,9 +139,13 @@ export default {
       }
 
       if (hasValidSubscription) {
-        const { query: subscriptionQuery, variables: subscriptionVariables } = subscription;
+        const { query: subscriptionQuery, variables: subscriptionVariables, authMode: subscriptionAuthMode } = subscription;
         try {
-          const observable = this.$Amplify.API.graphql({ query: subscriptionQuery, variables: subscriptionVariables });
+          const observable = this.$Amplify.API.graphql({ 
+            query: subscriptionQuery, 
+            variables: subscriptionVariables, 
+            authMode: subscriptionAuthMode 
+          });
 
           this.watchedSubscription = observable.subscribe({
             next: ({ value: { data }}) => {
