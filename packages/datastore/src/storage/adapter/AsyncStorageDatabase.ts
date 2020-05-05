@@ -1,11 +1,15 @@
 import { AsyncStorage } from 'react-native';
-import { PersistentModel, QueryOne } from '../../types';
+import {
+	ModelInstanceMetadata,
+	PaginationInput,
+	PersistentModel,
+	QueryOne,
+} from '../../types';
 
 const DB_NAME = '@AmplifyDatastore';
 const COLLECTION = 'Collection';
 const DATA = 'Data';
 
-// TODO: Consider refactoring to a batch save operation.
 class AsyncStorageDatabase {
 	async save<T extends PersistentModel>(item: T, storeName: string) {
 		const itemKey = this.getKeyForItem(storeName, item.id);
@@ -16,6 +20,27 @@ class AsyncStorageDatabase {
 		const collection = collectionForStore || [];
 		collection.push(itemKey);
 		await AsyncStorage.setItem(storeKey, JSON.stringify(collection));
+	}
+
+	async batchSave(storeName: string, items: ModelInstanceMetadata[]) {
+		if (items.length === 0) {
+			return;
+		}
+
+		const keyValuePairs: [string, string][] = items.map(item => {
+			const itemKey = this.getKeyForItem(storeName, item.id);
+			return [itemKey, JSON.stringify(item)];
+		});
+
+		await new Promise((resolve, reject) => {
+			AsyncStorage.multiSet(keyValuePairs, (errors?: Error[]) => {
+				if (errors && errors.length > 0) {
+					reject(errors);
+				} else {
+					resolve();
+				}
+			});
+		});
 	}
 
 	async get<T extends PersistentModel>(
@@ -48,12 +73,37 @@ class AsyncStorageDatabase {
 	 * It uses getAllKeys to first retrieve the keys and then filters based on the prefix
 	 * It then loads all the records for that filtered set of keys using multiGet()
 	 */
-	async getAll<T extends PersistentModel>(storeName: string): Promise<T[]> {
-		const allKeys = await AsyncStorage.getAllKeys();
+	async getAll<T extends PersistentModel>(
+		storeName: string,
+		pagination?: PaginationInput
+	): Promise<T[]> {
+		const allKeys: string[] = await AsyncStorage.getAllKeys();
 		const prefixForStoreItems = this.getKeyPrefixForStoreItems(storeName);
-		const keysForStore = allKeys.filter(key =>
-			key.startsWith(prefixForStoreItems)
-		);
+
+		const { page = 0, limit = 0 } = pagination || {};
+		const start = Math.max(0, page * limit) || 0;
+		const end = limit > 0 ? start + limit : undefined;
+
+		const keysForStore: string[] = [];
+		let count = 0;
+		for (let key of allKeys) {
+			const matchesPrefix = key.startsWith(prefixForStoreItems);
+
+			if (matchesPrefix) {
+				count++;
+
+				if (count <= start) {
+					continue;
+				}
+
+				keysForStore.push(key);
+
+				if (count === end) {
+					break;
+				}
+			}
+		}
+
 		const storeRecordStrings = await AsyncStorage.multiGet(keysForStore);
 		const records = storeRecordStrings.map(([key, value]) => JSON.parse(value));
 		return records;

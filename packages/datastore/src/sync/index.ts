@@ -9,6 +9,7 @@ import {
 	ErrorHandler,
 	InternalSchema,
 	ModelInit,
+	ModelInstanceMetadata,
 	MutableModel,
 	NamespaceResolver,
 	PersistentModelConstructor,
@@ -211,7 +212,9 @@ export class SyncEngine {
 											item
 										);
 
-										this.modelMerger.merge(this.storage, model);
+										this.storage.runExclusive(storage =>
+											this.modelMerger.merge(storage, model)
+										);
 									}
 								)
 						);
@@ -230,7 +233,9 @@ export class SyncEngine {
 										item
 									);
 
-									this.modelMerger.merge(this.storage, model);
+									this.storage.runExclusive(storage =>
+										this.modelMerger.merge(storage, model)
+									);
 								}
 							)
 						);
@@ -336,17 +341,33 @@ export class SyncEngine {
 					startedAt,
 					isFullSync,
 				}) => {
-					const promises = items.map(async item => {
-						const modelConstructor = this.userModelClasses[
-							modelDefinition.name
-						] as PersistentModelConstructor<any>;
+					const modelConstructor = this.userModelClasses[
+						modelDefinition.name
+					] as PersistentModelConstructor<any>;
 
-						const model = this.modelInstanceCreator(modelConstructor, item);
+					/**
+					 * If there are mutations in the outbox for a given id, those need to be
+					 * merged individually. Otherwise, we can merge them in batches.
+					 */
+					await this.storage.runExclusive(async storage => {
+						const idsInOutbox = await this.outbox.getModelIds(storage);
 
-						return this.modelMerger.merge(this.storage, model);
+						const oneByOne: ModelInstanceMetadata[] = [];
+						const page = items.filter(item => {
+							if (!idsInOutbox.has(item.id)) {
+								return true;
+							}
+
+							oneByOne.push(item);
+							return false;
+						});
+
+						for (let item of oneByOne) {
+							await this.modelMerger.merge(storage, item);
+						}
+
+						await this.modelMerger.mergePage(storage, modelConstructor, page);
 					});
-
-					await Promise.all(promises);
 
 					if (done) {
 						paginatingModels.delete(modelDefinition);
@@ -506,7 +527,10 @@ export class SyncEngine {
 			c => c.namespace('eq', namespace).model('eq', model)
 		);
 
-		const [modelMetadata] = await this.storage.query(ModelMetadata, predicate);
+		const [modelMetadata] = await this.storage.query(ModelMetadata, predicate, {
+			page: 0,
+			limit: 1,
+		});
 
 		return modelMetadata;
 	}

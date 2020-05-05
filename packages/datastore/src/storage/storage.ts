@@ -5,6 +5,7 @@ import { ModelInstanceCreator } from '../datastore/datastore';
 import { ModelPredicateCreator } from '../predicates';
 import {
 	InternalSchema,
+	ModelInstanceMetadata,
 	ModelPredicate,
 	NamespaceResolver,
 	OpType,
@@ -27,8 +28,9 @@ export type StorageSubscriptionMessage = SubscriptionMessage<any> & {
 };
 
 export type StorageFacade = Omit<Adapter, 'setUp'>;
+export type Storage = InstanceType<typeof StorageClass>;
 
-class Storage implements StorageFacade {
+class StorageClass implements StorageFacade {
 	private initialized: Promise<void>;
 	private readonly pushStream: {
 		observable: Observable<StorageSubscriptionMessage>;
@@ -236,10 +238,19 @@ class Storage implements StorageFacade {
 			this.pushStream.complete();
 		}
 	}
+
+	async batchSave(
+		modelConstructor: PersistentModelConstructor<any>,
+		items: ModelInstanceMetadata[]
+	): Promise<void> {
+		await this.init();
+
+		return this.adapter.batchSave(modelConstructor, items);
+	}
 }
 
 class ExclusiveStorage implements StorageFacade {
-	private storage: Storage;
+	private storage: StorageClass;
 	private readonly mutex = new Mutex();
 	constructor(
 		schema: InternalSchema,
@@ -251,7 +262,7 @@ class ExclusiveStorage implements StorageFacade {
 		modelInstanceCreator: ModelInstanceCreator,
 		adapter?: Adapter
 	) {
-		this.storage = new Storage(
+		this.storage = new StorageClass(
 			schema,
 			namespaceResolver,
 			getModelConstructorByModelName,
@@ -260,7 +271,7 @@ class ExclusiveStorage implements StorageFacade {
 		);
 	}
 
-	runExclusive<T>(fn: (storage: Storage) => Promise<T>) {
+	runExclusive<T>(fn: (storage: StorageClass) => Promise<T>) {
 		return <Promise<T>>this.mutex.runExclusive(fn.bind(this, this.storage));
 	}
 
@@ -322,7 +333,7 @@ class ExclusiveStorage implements StorageFacade {
 	}
 
 	static getNamespace() {
-		return Storage.getNamespace();
+		return StorageClass.getNamespace();
 	}
 
 	observe<T extends PersistentModel>(
@@ -335,6 +346,13 @@ class ExclusiveStorage implements StorageFacade {
 
 	async clear() {
 		await this.storage.clear();
+	}
+
+	batchSave(
+		modelConstructor: PersistentModelConstructor<any>,
+		items: ModelInstanceMetadata[]
+	): Promise<void> {
+		return this.storage.batchSave(modelConstructor, items);
 	}
 }
 

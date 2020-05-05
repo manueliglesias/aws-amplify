@@ -1,20 +1,20 @@
 import { ConsoleLogger as Logger } from '@aws-amplify/core';
-import AsyncStorageDatabase from './AsyncStorageDatabase';
 import { Adapter } from '.';
 import { ModelInstanceCreator } from '../../datastore/datastore';
 import { ModelPredicateCreator } from '../../predicates';
 import {
 	InternalSchema,
 	isPredicateObj,
+	ModelInstanceMetadata,
 	ModelPredicate,
 	NamespaceResolver,
 	OpType,
+	PaginationInput,
 	PersistentModel,
 	PersistentModelConstructor,
 	PredicateObject,
 	QueryOne,
 	RelationType,
-	PaginationInput,
 } from '../../types';
 import {
 	exhaustiveCheck,
@@ -23,6 +23,7 @@ import {
 	traverseModel,
 	validatePredicate,
 } from '../../util';
+import AsyncStorageDatabase from './AsyncStorageDatabase';
 
 const logger = new Logger('DataStore');
 
@@ -34,7 +35,7 @@ class AsyncStorageAdapter implements Adapter {
 		namsespaceName: string,
 		modelName: string
 	) => PersistentModelConstructor<any>;
-	private db: any;
+	private db: AsyncStorageDatabase;
 	private initPromise: Promise<void>;
 	private resolve: (value?: any) => void;
 	private reject: (value?: any) => void;
@@ -271,13 +272,10 @@ class AsyncStorageAdapter implements Adapter {
 				);
 			}
 		}
-		const all = <T[]>await this.db.getAll(storeName);
 
-		return await this.load(
-			namespaceName,
-			modelConstructor.name,
-			this.inMemoryPagination(all, pagination)
-		);
+		const all = <T[]>await this.db.getAll(storeName, pagination);
+
+		return await this.load(namespaceName, modelConstructor.name, all);
 	}
 
 	private inMemoryPagination<T>(
@@ -511,6 +509,17 @@ class AsyncStorageAdapter implements Adapter {
 
 		this.db = undefined;
 		this.initPromise = undefined;
+	}
+
+	async batchSave(
+		modelConstructor: PersistentModelConstructor<any>,
+		items: ModelInstanceMetadata[]
+	): Promise<void> {
+		const { name: modelName } = modelConstructor;
+		const namespaceName = this.namespaceResolver(modelConstructor);
+		const storeName = this.getStorename(namespaceName, modelName);
+
+		await this.db.batchSave(storeName, items);
 	}
 }
 

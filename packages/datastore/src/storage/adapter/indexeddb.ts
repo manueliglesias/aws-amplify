@@ -1,28 +1,30 @@
 import { ConsoleLogger as Logger } from '@aws-amplify/core';
 import * as idb from 'idb';
+import { IDBPIndex } from 'idb';
 import { Adapter } from '.';
 import { ModelInstanceCreator } from '../../datastore/datastore';
 import { ModelPredicateCreator } from '../../predicates';
 import {
 	InternalSchema,
 	isPredicateObj,
+	ModelInstanceMetadata,
 	ModelPredicate,
 	NamespaceResolver,
 	OpType,
+	PaginationInput,
 	PersistentModel,
 	PersistentModelConstructor,
 	PredicateObject,
 	QueryOne,
 	RelationType,
-	PaginationInput,
 } from '../../types';
 import {
 	exhaustiveCheck,
 	getIndex,
 	isModelConstructor,
+	isPrivateMode,
 	traverseModel,
 	validatePredicate,
-	isPrivateMode,
 } from '../../util';
 
 const logger = new Logger('DataStore');
@@ -97,20 +99,72 @@ class IndexedDBAdapter implements Adapter {
 
 		try {
 			if (!this.db) {
-				this.db = await idb.openDB(DB_NAME, 1, {
-					upgrade: (db, _oldVersion, _newVersion, _txn) => {
-						const keyPath: string = <string>(<keyof PersistentModel>'id');
-						Object.keys(theSchema.namespaces).forEach(namespaceName => {
-							const namespace = theSchema.namespaces[namespaceName];
+				const VERSION = 2;
+				this.db = await idb.openDB(DB_NAME, VERSION, {
+					upgrade: async (db, oldVersion, newVersion, txn) => {
+						if (oldVersion === 0) {
+							Object.keys(theSchema.namespaces).forEach(namespaceName => {
+								const namespace = theSchema.namespaces[namespaceName];
 
-							Object.keys(namespace.models).forEach(modelName => {
-								const indexes = this.schema.namespaces[namespaceName]
-									.relationships[modelName].indexes;
-								const storeName = this.getStorename(namespaceName, modelName);
-								const store = db.createObjectStore(storeName, { keyPath });
-								indexes.forEach(index => store.createIndex(index, index));
+								Object.keys(namespace.models).forEach(modelName => {
+									const storeName = this.getStorename(namespaceName, modelName);
+									const store = db.createObjectStore(storeName, {
+										autoIncrement: true,
+									});
+
+									const indexes = this.schema.namespaces[namespaceName]
+										.relationships[modelName].indexes;
+									indexes.forEach(index => store.createIndex(index, index));
+
+									store.createIndex('byId', 'id', { unique: true });
+								});
 							});
-						});
+
+							return;
+						}
+
+						if (oldVersion === 1 && newVersion === 2) {
+							try {
+								for (let storeName of txn.objectStoreNames) {
+									const origStore = txn.objectStore(storeName);
+
+									// rename original store
+									const tmpName = `tmp_${storeName}`;
+									origStore.name = tmpName;
+
+									// create new store with original name
+									const newStore = db.createObjectStore(storeName, {
+										keyPath: undefined,
+										autoIncrement: true,
+									});
+
+									newStore.createIndex('byId', 'id', { unique: true });
+
+									let cursor = await origStore.openCursor();
+									let count = 0;
+
+									// Copy data from original to new
+									while (cursor && cursor.value) {
+										// we don't pass key, since they are all new entries in the new store
+										await newStore.put(cursor.value);
+
+										cursor = await cursor.continue();
+										count++;
+									}
+
+									// delete original
+									db.deleteObjectStore(tmpName);
+
+									logger.debug(`${count} ${storeName} records migrated`);
+								}
+							} catch (error) {
+								logger.error('Error migrating IndexedDB data', error);
+								txn.abort();
+								throw error;
+							}
+
+							return;
+						}
 					},
 				});
 
@@ -119,6 +173,25 @@ class IndexedDBAdapter implements Adapter {
 		} catch (error) {
 			this.reject(error);
 		}
+	}
+
+	private async _get<T>(
+		storeOrStoreName: idb.IDBPObjectStore | string,
+		id: string
+	): Promise<T> {
+		let index: IDBPIndex;
+
+		if (typeof storeOrStoreName === 'string') {
+			const storeName = storeOrStoreName;
+			index = this.db.transaction(storeName, 'readonly').store.index('byId');
+		} else {
+			const store = storeOrStoreName;
+			index = store.index('byId');
+		}
+
+		const result = await index.get(id);
+
+		return result;
 	}
 
 	async save<T extends PersistentModel>(
@@ -152,7 +225,7 @@ class IndexedDBAdapter implements Adapter {
 		);
 		const store = tx.objectStore(storeName);
 
-		const fromDB = await store.get(model.id);
+		const fromDB = await this._get(store, model.id);
 
 		if (condition) {
 			const predicates = ModelPredicateCreator.getPredicates(condition);
@@ -177,16 +250,21 @@ class IndexedDBAdapter implements Adapter {
 			const { id } = item;
 
 			const opType: OpType =
-				(await store.get(id)) === undefined ? OpType.INSERT : OpType.UPDATE;
+				(await this._get(store, id)) === undefined
+					? OpType.INSERT
+					: OpType.UPDATE;
 
 			// It is me
 			if (id === model.id) {
-				await store.put(item);
+				const key = await store.index('byId').getKey(item.id);
+				await store.put(item, key);
 
 				result.push([instance, opType]);
 			} else {
 				if (opType === OpType.INSERT) {
-					await store.put(item);
+					// Even if the parent is an INSERT, the child might not be, so we need to get its key
+					const key = await store.index('byId').getKey(item.id);
+					await store.put(item, key);
 
 					result.push([instance, opType]);
 				}
@@ -234,7 +312,10 @@ class IndexedDBAdapter implements Adapter {
 				case 'HAS_ONE':
 					for await (const recordItem of records) {
 						if (recordItem[fieldName]) {
-							const connectionRecord = await store.get(recordItem[fieldName]);
+							const connectionRecord = await this._get(
+								store,
+								recordItem[fieldName]
+							);
 
 							recordItem[fieldName] =
 								connectionRecord &&
@@ -246,7 +327,10 @@ class IndexedDBAdapter implements Adapter {
 				case 'BELONGS_TO':
 					for await (const recordItem of records) {
 						if (recordItem[targetName]) {
-							const connectionRecord = await store.get(recordItem[targetName]);
+							const connectionRecord = await this._get(
+								store,
+								recordItem[targetName]
+							);
 
 							recordItem[fieldName] =
 								connectionRecord &&
@@ -292,7 +376,7 @@ class IndexedDBAdapter implements Adapter {
 				if (idPredicate) {
 					const { operand: id } = idPredicate;
 
-					const record = <any>await this.db.get(storeName, id);
+					const record = <any>await this._get(storeName, id);
 
 					if (record) {
 						const [x] = await this.load(namespaceName, modelConstructor.name, [
@@ -357,7 +441,7 @@ class IndexedDBAdapter implements Adapter {
 				.objectStore(storeName)
 				.openCursor();
 
-			if (initialRecord > 0) {
+			if (cursor && initialRecord > 0) {
 				await cursor.advance(initialRecord);
 			}
 
@@ -474,7 +558,7 @@ class IndexedDBAdapter implements Adapter {
 				const tx = this.db.transaction([storeName], 'readwrite');
 				const store = tx.objectStore(storeName);
 
-				const fromDB = await store.get(model.id);
+				const fromDB = await this._get(store, model.id);
 
 				if (fromDB === undefined) {
 					const msg = 'Model instance not found in storage';
@@ -545,10 +629,17 @@ class IndexedDBAdapter implements Adapter {
 
 			for await (const item of items) {
 				if (item) {
+					let key: IDBValidKey;
+
 					if (typeof item === 'object') {
-						await store.delete(item['id']);
+						key = await store.index('byId').getKey(item['id']);
+					} else {
+						key = await store.index('byId').getKey(item.toString());
 					}
-					await store.delete(item.toString());
+
+					if (key !== undefined) {
+						await store.delete(key);
+					}
 				}
 			}
 		}
@@ -640,6 +731,36 @@ class IndexedDBAdapter implements Adapter {
 
 		this.db = undefined;
 		this.initPromise = undefined;
+	}
+
+	async batchSave(
+		modelConstructor: PersistentModelConstructor<any>,
+		items: ModelInstanceMetadata[]
+	): Promise<void> {
+		if (items.length === 0) {
+			return;
+		}
+
+		await this.checkPrivate();
+
+		const storeName = this.getStorenameForModel(modelConstructor);
+
+		const txn = this.db.transaction(storeName, 'readwrite');
+		const store = txn.store;
+
+		for (let item of items) {
+			const { id, _deleted } = item;
+			const index = store.index('byId');
+			const key = await index.getKey(id);
+
+			if (!_deleted) {
+				await store.put(item, key);
+			} else {
+				await store.delete(key);
+			}
+		}
+
+		await txn.done;
 	}
 }
 

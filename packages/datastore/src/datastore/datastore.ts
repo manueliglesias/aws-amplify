@@ -771,7 +771,8 @@ async function checkSchemaVersion(
 			Setting,
 			ModelPredicateCreator.createFromExisting(modelDefinition, c =>
 				c.key('eq', SETTING_SCHEMA_VERSION)
-			)
+			),
+			{ page: 0, limit: 1 }
 		);
 
 		if (schemaVersionSetting !== undefined) {
