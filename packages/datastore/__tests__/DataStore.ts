@@ -298,6 +298,14 @@ describe('DataStore tests', () => {
 
 		test('Instantiation validations', async () => {
 			expect(() => {
+				new Model(<any>undefined);
+			}).toThrowError('Instance cannot be initialized with undefined');
+
+			expect(() => {
+				new Model(<any>{});
+			}).toThrowError('Field field1 is required');
+
+			expect(() => {
 				new Model({ field1: undefined });
 			}).toThrowError('Field field1 is required');
 

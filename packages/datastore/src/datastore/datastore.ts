@@ -228,43 +228,56 @@ const initializeInstance = <T>(
 	modelDefinition: SchemaModel | SchemaNonModel,
 	draft: Draft<T & ModelInstanceMetadata>
 ) => {
-	Object.entries(init).forEach(([k, v]) => {
-		const fieldDefinition = modelDefinition.fields[k];
+	if (typeof init === 'undefined') {
+		throw new Error('Instance cannot be initialized with undefined');
+	}
 
-		if (fieldDefinition !== undefined) {
-			const { type, isRequired, name, isArray } = fieldDefinition;
+	const extraFields = new Set<string>(Object.keys(init));
 
-			if (isRequired && (v === null || v === undefined)) {
-				throw new Error(`Field ${name} is required`);
-			}
+	for (const [, fieldDefinition] of Object.entries(modelDefinition.fields)) {
+		const { type, isRequired, name, isArray } = fieldDefinition;
 
-			if (isGraphQLScalarType(type)) {
-				const jsType = GraphQLScalarType.getJSType(type);
+		if (name === 'id') {
+			continue;
+		}
 
-				if (isArray) {
-					if (!Array.isArray(v)) {
-						throw new Error(
-							`Field ${name} should be of type ${jsType}[], ${typeof v} received. ${v}`
-						);
-					}
+		const v = init[name];
 
-					if ((<[]>v).some(e => typeof e !== jsType)) {
-						const elemTypes = (<[]>v).map(e => typeof e).join(',');
+		if (isRequired && (v === null || v === undefined)) {
+			throw new Error(`Field ${name} is required`);
+		}
 
-						throw new Error(
-							`All elements in the ${name} array should be of type ${jsType}, [${elemTypes}] received. ${v}`
-						);
-					}
-				} else if (typeof v !== jsType && v !== null) {
+		if (isGraphQLScalarType(type)) {
+			const jsType = GraphQLScalarType.getJSType(type);
+
+			if (isArray) {
+				if (!Array.isArray(v) && isRequired) {
 					throw new Error(
-						`Field ${name} should be of type ${jsType}, ${typeof v} received. ${v}`
+						`Field ${name} should be of type ${jsType}[], ${typeof v} received. ${v}`
 					);
 				}
+
+				if (v && (<[]>v).some(e => typeof e !== jsType)) {
+					const elemTypes = (<[]>v).map(e => typeof e).join(',');
+
+					throw new Error(
+						`All elements in the ${name} array should be of type ${jsType}, [${elemTypes}] received. ${v}`
+					);
+				}
+			} else if (typeof v !== jsType && v !== null) {
+				throw new Error(
+					`Field ${name} should be of type ${jsType}, ${typeof v} received. ${v}`
+				);
 			}
 		}
 
-		(<any>draft)[k] = v;
-	});
+		(<any>draft)[name] = v;
+		extraFields.delete(name);
+	}
+
+	for (const k of extraFields) {
+		(<any>draft)[k] = init[k];
+	}
 };
 
 const createModelClass = <T extends PersistentModel>(
