@@ -290,6 +290,13 @@ export default class CognitoUser {
 				this.userDataKey = `${this.keyPrefix}.${this.username}.userData`;
 				serverBValue = new BigInteger(challengeParameters.SRP_B, 16);
 				salt = new BigInteger(challengeParameters.SALT, 16);
+
+				try {
+					validateSalt(salt);
+				} catch (error) {
+					return callback.onFailure(error);
+				}
+
 				this.getCachedDeviceKeyAndPassword();
 
 				authenticationHelper.getPasswordAuthenticationKey(
@@ -685,6 +692,12 @@ export default class CognitoUser {
 
 				const serverBValue = new BigInteger(challengeParameters.SRP_B, 16);
 				const salt = new BigInteger(challengeParameters.SALT, 16);
+
+				try {
+					validateSalt(salt);
+				} catch (error) {
+					return callback.onFailure(error);
+				}
 
 				authenticationHelper.getPasswordAuthenticationKey(
 					this.deviceKey,
@@ -1390,7 +1403,7 @@ export default class CognitoUser {
 
 		const keyPrefix = `CognitoIdentityServiceProvider.${this.pool.getClientId()}.${
 			this.username
-		}`;
+			}`;
 		const idTokenKey = `${keyPrefix}.idToken`;
 		const accessTokenKey = `${keyPrefix}.accessToken`;
 		const refreshTokenKey = `${keyPrefix}.refreshToken`;
@@ -1555,7 +1568,7 @@ export default class CognitoUser {
 	cacheDeviceKeyAndPassword() {
 		const keyPrefix = `CognitoIdentityServiceProvider.${this.pool.getClientId()}.${
 			this.username
-		}`;
+			}`;
 		const deviceKeyKey = `${keyPrefix}.deviceKey`;
 		const randomPasswordKey = `${keyPrefix}.randomPasswordKey`;
 		const deviceGroupKeyKey = `${keyPrefix}.deviceGroupKey`;
@@ -1572,7 +1585,7 @@ export default class CognitoUser {
 	getCachedDeviceKeyAndPassword() {
 		const keyPrefix = `CognitoIdentityServiceProvider.${this.pool.getClientId()}.${
 			this.username
-		}`;
+			}`;
 		const deviceKeyKey = `${keyPrefix}.deviceKey`;
 		const randomPasswordKey = `${keyPrefix}.randomPasswordKey`;
 		const deviceGroupKeyKey = `${keyPrefix}.deviceGroupKey`;
@@ -1591,7 +1604,7 @@ export default class CognitoUser {
 	clearCachedDeviceKeyAndPassword() {
 		const keyPrefix = `CognitoIdentityServiceProvider.${this.pool.getClientId()}.${
 			this.username
-		}`;
+			}`;
 		const deviceKeyKey = `${keyPrefix}.deviceKey`;
 		const randomPasswordKey = `${keyPrefix}.randomPasswordKey`;
 		const deviceGroupKeyKey = `${keyPrefix}.deviceGroupKey`;
@@ -2119,5 +2132,24 @@ export default class CognitoUser {
 				}
 			);
 		}
+	}
+}
+
+/**
+ * Performs basic valdations on a salt.
+ * Throws an error it it is not valid.
+ * 
+ * @param {BigInteger} salt Big Integer representation of a Salt
+ * @throws Will throw an error if the salt is not valid
+ */
+function validateSalt(salt) {
+	if (!(salt instanceof BigInteger)) {
+		throw new Error('Salt is not a BigInteger');
+	}
+
+	const saltIsNegative = salt.compareTo(BigInteger.ZERO) < 0;
+
+	if (saltIsNegative) {
+		throw new Error(`Salt value is negative`);
 	}
 }
